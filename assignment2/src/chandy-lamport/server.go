@@ -4,20 +4,35 @@ import (
 	"log"
 )
 
-type void struct{}
+// type void struct{}
+type Set[T comparable] map[T]struct{}
 
-var voidmember void
+func (s Set[T]) Add(v T) {
+	s[v] = struct{}{}
+}
+
+func (s Set[T]) Contains(v T) bool {
+	_, ok := s[v]
+	return ok 
+}
+
+
+func (s Set[T]) Len() int {
+	return len(s)
+}
+
+// var voidmember void
 
 type ServerSnapShot struct {
 	tokens   int
-	peers    map[string]void
+	peers    Set[string]
 	messages map[string][]*SnapshotMessage
 }
 
 func NewServerSnapShot() *ServerSnapShot {
 	snap := ServerSnapShot{
 		0,
-		make(map[string]void),
+		make(Set[string]),
 		make(map[string][]*SnapshotMessage),
 	}
 
@@ -115,7 +130,7 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 			// In the middle of snap, recording message if
 		server.snapShots.Range(func(k, v interface{}) bool {
 			snap := v.(*ServerSnapShot)
-			if _, ok := snap.peers[src]; !ok {
+			if !snap.peers.Contains(src) {
 				snap.messages[src] = append(snap.messages[src], &SnapshotMessage{src, server.Id, msg})
 			}
 
@@ -145,11 +160,11 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 		si, _ := server.snapShots.Load(snapShotId)
 
 		snapshot := si.(*ServerSnapShot)
-		snapshot.peers[src] = voidmember
+		snapshot.peers.Add(src)
 
 
         // fmt.Printf("%s started snapshot %d\n", len(snapshot.peers), snapshotId)
-		if len(snapshot.peers) == len(server.inboundLinks) {
+		if snapshot.peers.Len() == len(server.inboundLinks) {
 			server.sim.NotifySnapshotComplete(server.Id, snapShotId)
 		}
 	}
