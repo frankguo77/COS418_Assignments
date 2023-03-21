@@ -1,6 +1,28 @@
 package chandy_lamport
 
-import "log"
+import (
+	"log"
+)
+
+type void struct{}
+
+var voidmember void
+
+type ServerSnapShot struct {
+	tokens   int
+	peers    map[string]void
+	messages map[string][]*SnapshotMessage
+}
+
+func NewServerSnapShot() *ServerSnapShot {
+	snap := ServerSnapShot{
+		0,
+		make(map[string]void),
+		make(map[string][]*SnapshotMessage),
+	}
+
+	return &snap
+}
 
 // The main participant of the distributed snapshot protocol.
 // Servers exchange token messages and marker messages among each other.
@@ -14,6 +36,7 @@ type Server struct {
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
 	// TODO: ADD MORE FIELDS HERE
+	snapShots *SyncMap
 }
 
 // A unidirectional communication channel between two servers
@@ -31,6 +54,7 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		NewSyncMap(),
 	}
 }
 
@@ -85,10 +109,68 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
 	// TODO: IMPLEMENT ME
+	switch msg := message.(type) {
+	case TokenMessage:
+		// if len(server.snapShots.internalMap) > 0 {
+			// In the middle of snap, recording message if
+		server.snapShots.Range(func(k, v interface{}) bool {
+			snap := v.(*ServerSnapShot)
+			if _, ok := snap.peers[src]; !ok {
+				snap.messages[src] = append(snap.messages[src], &SnapshotMessage{src, server.Id, msg})
+			}
+
+			return true
+		})
+			// for _,sid := range server.snapShots {
+			// 	snap := server.snapShots[sid]
+			// 	// peers did not send marker to me
+			// 	if _, ok := snap.peers[src]; !ok {
+			// 		snap.messages[src] = append(snap.messages[src], &SnapshotMessage{str, server.Id, msg})
+			// 	}
+			// }
+		// }
+
+		server.Tokens += msg.numTokens
+	case MarkerMessage:
+		snapShotId := msg.snapshotId
+
+		// fmt.Println("MarkerMessage", snapShotId, server.Id, src)
+		// si, ok := server.snapShots.Load(snapShotId)
+
+		// if !ok {
+		// 	server.StartSnapshot(snapShotId)
+		// } 
+		server.StartSnapshot(snapShotId)
+
+		si, _ := server.snapShots.Load(snapShotId)
+
+		snapshot := si.(*ServerSnapShot)
+		snapshot.peers[src] = voidmember
+
+
+        // fmt.Printf("%s started snapshot %d\n", len(snapshot.peers), snapshotId)
+		if len(snapshot.peers) == len(server.inboundLinks) {
+			server.sim.NotifySnapshotComplete(server.Id, snapShotId)
+		}
+	}
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
 	// TODO: IMPLEMENT ME
+	_, ok := server.snapShots.Load(snapshotId)
+	if ok{
+		return
+	}
+
+	// fmt.Printf("%s started snapshot %d\n", server.Id, snapshotId)
+
+	snapShot := NewServerSnapShot()
+	snapShot.tokens = server.Tokens
+	server.snapShots.Store(snapshotId, snapShot)
+
+	markMsg := MarkerMessage{snapshotId}
+
+	server.SendToNeighbors(markMsg)
 }

@@ -24,6 +24,7 @@ type Simulator struct {
 	servers        map[string]*Server // key = server ID
 	logger         *Logger
 	// TODO: ADD MORE FIELDS HERE
+	snapShots *SyncMap
 }
 
 func NewSimulator() *Simulator {
@@ -32,6 +33,7 @@ func NewSimulator() *Simulator {
 		0,
 		make(map[string]*Server),
 		NewLogger(),
+		NewSyncMap(),
 	}
 }
 
@@ -108,6 +110,16 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
+
+	server, ok := sim.servers[serverId]
+	if !ok {
+		log.Fatalf("Server %v does not exist\n", serverId)
+	}
+
+	ch := make(chan string)
+	// fmt.Printf("%+v\n", sim.snapShots)
+	sim.snapShots.Store(snapshotId, ch)
+	server.StartSnapshot(snapshotId)
 }
 
 // Callback for servers to notify the simulator that the snapshot process has
@@ -115,12 +127,45 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
+
+	// fmt.Println("NotifySnapshotComplete", serverId, snapshotId)
+	si, _ := sim.snapShots.Load(snapshotId)
+	// fmt.Println(sim.snapShots)
+	snapch := si.(chan string)
+	snapch <- serverId
 }
 
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
-	// TODO: IMPLEMENT ME
+	chi, _ := sim.snapShots.Load(snapshotId)
+	ch := chi.(chan string)
+	
+	// wg.Wait()
+	// fmt.Println(snapshotId)
+	for i := 0; i < len(sim.servers); i++ {
+		// fmt.Println(<-ch, i)
+		// fmt.Println(sid, i)
+		<-ch
+	}
+
+	close(ch)
+
+	// fmt.Println("Sim delete snaphot", snapshotId)
+	sim.snapShots.Delete(snapshotId)
+
+	for _, serverId := range getSortedKeys(sim.servers) {
+		server := sim.servers[serverId]
+		si, _ := server.snapShots.Load(snapshotId)
+		serversnapshot := si.(*ServerSnapShot)
+		snap.tokens[serverId] = serversnapshot.tokens
+		for _, peer := range getSortedKeys(server.inboundLinks) {
+			snap.messages = append(snap.messages, serversnapshot.messages[peer]...)
+		}
+
+		server.snapShots.Delete(snapshotId)
+	}
+
 	return &snap
 }
