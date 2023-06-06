@@ -326,7 +326,7 @@ func TestBackup(t *testing.T) {
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
 
-	fmt.Print("Test: leader backs up quickly over incorrect follower logs...")
+	fmt.Print("Test: leader backs up quickly over incorrect follower logs...\n")
 
 	cfg.one(rand.Int(), servers)
 
@@ -355,7 +355,7 @@ func TestBackup(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3)
 	}
-
+	
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
 	other := (leader1 + 2) % servers
@@ -370,19 +370,21 @@ func TestBackup(t *testing.T) {
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
-
 	// bring original leader back to life,
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 	}
+
 	cfg.connect((leader1 + 0) % servers)
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
-
+	// fmt.Print("\nTest: Point2\n")
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3)
 	}
+
+
 
 	// now everyone
 	for i := 0; i < servers; i++ {
@@ -522,7 +524,7 @@ func TestPersist1(t *testing.T) {
 	}
 
 	cfg.one(12, servers)
-
+	
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
 	cfg.start1(leader1)

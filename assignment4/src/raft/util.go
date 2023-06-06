@@ -3,7 +3,7 @@ package raft
 import "log"
 
 // Debugging
-const Debug = 2
+const Debug = 5
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	DPrintf1(1, format, a...)
@@ -12,7 +12,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 func DPrintf1(lv int, format string, a ...interface{}) (n int, err error) {
-	if lv > Debug {
+	if lv == Debug {
 		log.Printf(format, a...)
 	}
 	return
