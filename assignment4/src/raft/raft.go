@@ -86,6 +86,8 @@ type Raft struct {
 	// heartbeatTimeout time.Duration
 	lastHeartbeat time.Time
 
+	claimToBeApplied sync.Cond
+
 	// Your data here.
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -318,7 +320,10 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 // }
 
 func (rf *Raft) setCommitIdx(idx int) {
-	rf.commitIndex = idx
+	if idx > rf.commitIndex {
+		rf.commitIndex = idx
+		rf.claimToBeApplied.Signal()
+	}
 }
 
 func (rf *Raft) RequestAppendEntries(args RequestAppendEntriesArgs, reply *RequestAppendEntriesReply) {
@@ -338,6 +343,11 @@ func (rf *Raft) RequestAppendEntries(args RequestAppendEntriesArgs, reply *Reque
 	if args.Term > rf.currentTerm {
 		rf.changeToFollower(args.Term, -1)
 		rf.persist()
+	} else {
+		if rf.getRole() != Follower {
+			rf.changeToFollower(args.Term, -1)
+			rf.persist()
+		}
 	}
 
     reply.Term = rf.currentTerm
@@ -347,7 +357,6 @@ func (rf *Raft) RequestAppendEntries(args RequestAppendEntriesArgs, reply *Reque
 
 
 	rf.resetElectionTimer()
-	reply.Term = rf.currentTerm
 
 	if args.PrevLogIndex > len(rf.log)-1 {
 		reply.Sucess, reply.XIndex, reply.XTerm = false, len(rf.log), -1
@@ -404,6 +413,10 @@ func (rf *Raft) processVoteReply(args *RequestVoteArgs, reply *RequestVoteReply)
 }
 
 func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *RequestAppendEntriesReply, peersIdx int) {
+   if reply.Term < rf.currentTerm {
+		return
+   }
+
 	if reply.Term > rf.currentTerm {
 		rf.changeToFollower(reply.Term, -1)
 		rf.persist()
@@ -433,7 +446,7 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 				}
 			}
 
-			// rf.broadcastAppendEntries(rf.currentTerm)
+			rf.broadcastAppendEntries(true)
 		}
 			// return true
 			// go rf.sendAppendEntries(peersIdx)
@@ -454,7 +467,7 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 		// DPrintf1(3, "rf.nextIndex = %v", rf.nextIndex)
 		// DPrintf1(3, "rf.matchIndex = %v", rf.matchIndex)
 		// DPrintf1(3, "candiCommitIdx = %v, rf.commitIndex = %v", candiCommitIdx, rf.commitIndex)
-		// committed := false
+		committed := false
 	outerloop:
 		for candiCommitIdx > rf.commitIndex {
 			count := 0
@@ -465,7 +478,7 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 						count++
 						if count > len(rf.matchIndex)/2 {
 							rf.setCommitIdx(candiCommitIdx)
-							// committed = true
+							committed = true
 							break outerloop
 						}
 					}
@@ -476,9 +489,9 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 			candiCommitIdx--
 		}
 
-		// if committed {
-		// 	rf.broadcastAppendEntries(rf.currentTerm)
-		// }
+		if committed {
+			rf.broadcastAppendEntries(true)
+		}
 
 	}
 
@@ -784,26 +797,30 @@ func (rf *Raft) newCommittedEntries() []LogEntry {
 }
 
 func (rf *Raft) applyLogLoop(applyCh chan ApplyMsg) {
+	rf.mu.Lock()
 	for {
 		select {
 		case <-rf.killChan:
 			return
 		default:
-			time.Sleep(10 * time.Millisecond)
-			rf.mu.Lock()
-			for rf.commitIndex > rf.lastApplied && rf.lastApplied < len(rf.log)-1 {
-				rf.lastApplied++
+			rf.claimToBeApplied.Wait()
+			// rf.mu.Lock()
+			lastApplied := rf.lastApplied
+			for rf.commitIndex > lastApplied && lastApplied < len(rf.log)-1 {
+				lastApplied++
 				applyMsg := ApplyMsg{
-					Index:   rf.lastApplied,
-					Command: rf.log[rf.lastApplied].Command,
+					Index:   lastApplied,
+					Command: rf.log[lastApplied].Command,
 				}
 
 				DPrintf1(3, "[%d] applyMsg idx = [%d] :[%+v]", rf.me, rf.lastApplied, applyMsg)
 				applyCh <- applyMsg
+				rf.lastApplied = lastApplied
 			}
-			rf.mu.Unlock()
 		}
-	}	
+	}
+	
+	rf.mu.Unlock()
 	// for {
 	// 	select {
 	// 	case <-rf.killChan:
@@ -846,10 +863,12 @@ func (rf *Raft) applyLogLoop(applyCh chan ApplyMsg) {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
+	rf.mu = sync.Mutex{}
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
 	rf.applyCh = applyCh
+	rf.claimToBeApplied = *sync.NewCond(&rf.mu)
 
 	// Your initialization code here.
 	rf.currentTerm = 0
