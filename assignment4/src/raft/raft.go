@@ -355,14 +355,13 @@ func (rf *Raft) RequestAppendEntries(args RequestAppendEntriesArgs, reply *Reque
 		return
 	}  
 
-
 	rf.resetElectionTimer()
 
 	if args.PrevLogIndex > len(rf.log)-1 {
 		reply.Sucess, reply.XIndex, reply.XTerm = false, len(rf.log), -1
 	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		idx := args.PrevLogIndex - 1
-		for idx > 0 && rf.log[idx] == rf.log[args.PrevLogIndex] {
+		for idx > 0 && rf.log[idx].Term == rf.log[args.PrevLogIndex].Term {
 			idx--
 		}
 
@@ -432,19 +431,24 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 			if reply.XTerm == -1 {
 				rf.nextIndex[peersIdx] = reply.XIndex
 			} else {
-				conflictTermIndex := -1
-				for index := reply.XIndex; index > 0; index-- {
+				conflictTermIndex := reply.XIndex
+				for index := args.PrevLogIndex; index >= reply.XIndex; index-- {
 					if rf.log[index].Term == reply.XTerm {
-						conflictTermIndex = index
+						conflictTermIndex = index + 1
 						break
 					}
 				}
-				if conflictTermIndex != -1 {
-					rf.nextIndex[peersIdx] = conflictTermIndex
-				} else {
-					rf.nextIndex[peersIdx] = reply.XIndex
-				}
+
+				rf.nextIndex[peersIdx] = conflictTermIndex
+				// if conflictTermIndex != -1 {
+				// 	rf.nextIndex[peersIdx] = conflictTermIndex
+				// 	DPrintf1(6, "Find term (%d) in log.", reply.XTerm)
+				// } else {
+				// 	rf.nextIndex[peersIdx] = reply.XIndex
+				// 	DPrintf1(6, "Fail to find term (%d) in log.", reply.XTerm)
+				// }
 			}
+			// rf.nextIndex[peersIdx] = reply.XIndex
 
 			rf.broadcastAppendEntries(true)
 		}
@@ -455,10 +459,10 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 		rf.nextIndex[peersIdx] = rf.matchIndex[peersIdx] + 1
 		// rf.nextIndex[peersIdx] += len(args.Entries)
 		// DPrintf1(5, "Node %d: receive logresponse! next: %d, delta: %d, loglen: %d", peersIdx, rf.nextIndex[peersIdx], logcnt, len(rf.log))
-		if rf.nextIndex[peersIdx] > len(rf.log) {
-			rf.nextIndex[peersIdx] = len(rf.log)
-			DPrintf1(5, "Node %d log overflow! next: %d, delta: %d, loglen: %d", peersIdx, rf.nextIndex[peersIdx], len(args.Entries), len(rf.log))
-		}
+		// if rf.nextIndex[peersIdx] > len(rf.log) {
+		// 	rf.nextIndex[peersIdx] = len(rf.log)
+		// 	DPrintf1(5, "Node %d log overflow! next: %d, delta: %d, loglen: %d", peersIdx, rf.nextIndex[peersIdx], len(args.Entries), len(rf.log))
+		// }
 		// rf.matchIndex[peersIdx] = rf.nextIndex[peersIdx] - 1
 
 		// rf.nextIndex[peersIdx] = len(rf.log)
