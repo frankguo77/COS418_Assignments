@@ -33,7 +33,7 @@ const (
 	ELECT_TIMEOUT_MIN = 300
 	ELECT_TIMEOUT_MAX = 600
 	HEATBEAT_TIMEOUT  = 150
-	TIMEINTERVAL      = 50
+	TIMEINTERVAL      = 40
 	activeWindowWidth = ELECT_TIMEOUT_MAX * time.Millisecond
 )
 
@@ -279,11 +279,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VotedGranted = false
 	reply.Term = rf.currentTerm
 
-	if (args.Term < rf.currentTerm) {
+	if args.Term < rf.currentTerm {
 		return
 	}
 
-	if (args.Term > rf.currentTerm) {
+	if args.Term > rf.currentTerm {
 		rf.changeToFollower(args.Term, -1)
 		rf.persist()
 	}
@@ -302,7 +302,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		rf.resetElectionTimer()
 		reply.Term = args.Term
 		reply.VotedGranted = true
-		DPrintf("[%d] granted vote to [%d]", rf.me, args.CandidateId)
+		DPrintf1(5, "[%d] granted vote to [%d]", rf.me, args.CandidateId)
 	} else {
 		DPrintf("[%d] don' t granted vote to [%d]", rf.me, args.CandidateId)
 		reply.VotedGranted = false
@@ -350,10 +350,10 @@ func (rf *Raft) RequestAppendEntries(args RequestAppendEntriesArgs, reply *Reque
 		}
 	}
 
-    reply.Term = rf.currentTerm
+	reply.Term = rf.currentTerm
 	if rf.getRole() != Follower {
 		return
-	}  
+	}
 
 	rf.resetElectionTimer()
 
@@ -400,6 +400,7 @@ func (rf *Raft) processVoteReply(args *RequestVoteArgs, reply *RequestVoteReply)
 		if rf.voteReceived > len(rf.peers)/2 {
 			// DPrintf("[%d] become leader of term[%d]", rf.me, rf.currentTerm)
 			rf.changeToLeader()
+			go rf.broadcastAppendEntries(true)
 			// rf.broadcastAppendEntries(rf.currentTerm)
 			// rf.broadcastAppendEntries(true)
 			// stopTimer(rf.electionTimer)
@@ -412,9 +413,9 @@ func (rf *Raft) processVoteReply(args *RequestVoteArgs, reply *RequestVoteReply)
 }
 
 func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *RequestAppendEntriesReply, peersIdx int) {
-   if reply.Term < rf.currentTerm {
+	if reply.Term < rf.currentTerm {
 		return
-   }
+	}
 
 	if reply.Term > rf.currentTerm {
 		rf.changeToFollower(reply.Term, -1)
@@ -422,9 +423,9 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 		return
 	}
 
-	if rf.getRole() != Leader || rf.currentTerm != args.Term || rf.nextIndex[peersIdx] - 1 != args.PrevLogIndex {
+	if rf.getRole() != Leader || rf.currentTerm != args.Term || rf.nextIndex[peersIdx]-1 != args.PrevLogIndex {
 		return
-	}	
+	}
 
 	if !reply.Sucess {
 		if reply.XTerm != -1 || reply.XIndex != -1 {
@@ -452,8 +453,8 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 
 			rf.broadcastAppendEntries(true)
 		}
-			// return true
-			// go rf.sendAppendEntries(peersIdx)
+		// return true
+		// go rf.sendAppendEntries(peersIdx)
 	} else {
 		rf.matchIndex[peersIdx] = max(rf.matchIndex[peersIdx], args.PrevLogIndex+len(args.Entries))
 		rf.nextIndex[peersIdx] = rf.matchIndex[peersIdx] + 1
@@ -499,7 +500,7 @@ func (rf *Raft) processAppendEntries(args *RequestAppendEntriesArgs, reply *Requ
 
 	}
 
-	return 
+	return
 }
 
 func (rf *Raft) broadcastRequestVote() {
@@ -527,7 +528,11 @@ func (rf *Raft) broadcastRequestVote() {
 			reply := &RequestVoteReply{}
 			if rf.peers[server].Call("Raft.RequestVote", args, reply) {
 				rf.mu.Lock()
-				defer rf.mu.Unlock()
+				DPrintf1(6, "broadcastRequestVote ： [%d] Locked", rf.me)
+				defer func() {
+					rf.mu.Unlock()
+					DPrintf1(6, "broadcastRequestVote ： [%d] UnLocked", rf.me)
+				}()
 				rf.lastAck[server] = time.Now()
 				rf.processVoteReply(&args, reply)
 			}
@@ -538,7 +543,10 @@ func (rf *Raft) broadcastRequestVote() {
 func (rf *Raft) sendAppendEntries(server int) {
 	// for {
 	rf.mu.Lock()
+	// DPrintf1(6, "sendAppendEntries ： [%d] Locked", rf.me)
+	
 	if rf.getRole() != Leader {
+		// DPrintf1(6, "sendAppendEntries ： [%d] UnLocked", rf.me)
 		rf.mu.Unlock()
 		return
 	}
@@ -546,6 +554,7 @@ func (rf *Raft) sendAppendEntries(server int) {
 	prevLogIdx := rf.nextIndex[server] - 1
 	if prevLogIdx == -1 {
 		DPrintf1(5, "sendAppendEntries:server = [%d], prevLogIdx = [%d]", server, prevLogIdx)
+		// DPrintf1(6, "sendAppendEntries ： [%d] UnLocked", rf.me)
 		rf.mu.Unlock()
 		return
 	}
@@ -575,7 +584,7 @@ func (rf *Raft) sendAppendEntries(server int) {
 	// if len(args.Entries) > 0 {
 	// 	DPrintf1(5, "replicating log", "to whom",id, "arg", arg,"nextIndex",raft.NextIndex[id])
 	// }
-
+    // DPrintf1(6, "sendAppendEntries ： [%d] UnLocked", rf.me)
 	rf.mu.Unlock()
 
 	reply := &RequestAppendEntriesReply{}
@@ -585,9 +594,11 @@ func (rf *Raft) sendAppendEntries(server int) {
 	}
 
 	rf.mu.Lock()
+	// DPrintf1(6, "sendAppendEntries2 ： [%d] Locked", rf.me)
 	rf.lastAck[server] = time.Now()
 	rf.processAppendEntries(&args, reply, server)
 	rf.mu.Unlock()
+	// DPrintf1(6, "sendAppendEntries2 ： [%d] UnLocked", rf.me)
 	// return
 	// }
 }
@@ -652,8 +663,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	// isLeader := true
+	DPrintf1(6, "Start : Lock [%d]", rf.me)
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	defer func() {
+		rf.mu.Unlock()
+		DPrintf1(6, "Start : UnLock [%d]", rf.me)
+	}()
+
 	isLeader := rf.isLeader
 	if isLeader {
 		term = rf.currentTerm
@@ -664,7 +680,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.persist()
 		rf.broadcastAppendEntries(true)
 	}
-
+    DPrintf1(6, "[%d ]Return", rf.me)
 	return index, term, isLeader
 }
 
@@ -693,35 +709,38 @@ func (rf *Raft) Kill() {
 // }
 
 func (rf *Raft) ticker() {
+	DPrintf1(5, "[%d] StartTicker", rf.me)
 	for {
 		select {
-			case <-rf.killChan:
-				return
-			default:
-				time.Sleep(TIMEINTERVAL * time.Millisecond)
-				rf.mu.Lock()
-				
-				switch rf.getRole() {
-				case Follower:
-					fallthrough
-				case Candidate:
-					if rf.pastElectionTimeout(){
-						rf.startNewElection()
-					}
-				case Leader:
-					if !rf.quorumActive() {
-						rf.changeToFollower(rf.currentTerm, -1)
-						break
-					}
-					forced := false
-					if rf.pastHeartbeatTimeout() {
-						forced = true
-						rf.resetHeartbeatTimer()
-					}
-					
-					rf.broadcastAppendEntries(forced)
+		case <-rf.killChan:
+			return
+		default:
+			time.Sleep(TIMEINTERVAL * time.Millisecond)
+			rf.mu.Lock()
+			// DPrintf1(6, "ticker ： Locked")
+
+			switch rf.getRole() {
+			case Follower:
+				fallthrough
+			case Candidate:
+				if rf.pastElectionTimeout() {
+					rf.startNewElection()
 				}
-				rf.mu.Unlock()
+			case Leader:
+				if !rf.quorumActive() {
+					rf.changeToFollower(rf.currentTerm, -1)
+					break
+				}
+				forced := false
+				if rf.pastHeartbeatTimeout() {
+					forced = true
+					rf.resetHeartbeatTimer()
+				}
+
+				rf.broadcastAppendEntries(forced)
+			}
+			rf.mu.Unlock()
+			// DPrintf1(6, "ticker ： UnLocked")
 		}
 	}
 }
@@ -791,12 +810,12 @@ func (rf *Raft) ticker() {
 
 func (rf *Raft) newCommittedEntries() []LogEntry {
 	// FIXME: replace with `start == end` and verify it.
-	if rf.commitIndex <= rf.lastApplied + 1 {
+	if rf.commitIndex <= rf.lastApplied+1 {
 		// note: len(nil slice) == 0.
 		return nil
 	}
 	cloned := make([]LogEntry, 0)
-	cloned = append(cloned, rf.log[rf.lastApplied + 1: rf.commitIndex]...)
+	cloned = append(cloned, rf.log[rf.lastApplied+1:rf.commitIndex]...)
 	return cloned
 }
 
@@ -807,7 +826,9 @@ func (rf *Raft) applyLogLoop(applyCh chan ApplyMsg) {
 		case <-rf.killChan:
 			return
 		default:
+			DPrintf1(6, "applyLogLoop [%d]： UnLocked", rf.me)
 			rf.claimToBeApplied.Wait()
+			DPrintf1(6, "applyLogLoop [%d]： Locked", rf.me)
 			// rf.mu.Lock()
 			lastApplied := rf.lastApplied
 			for rf.commitIndex > lastApplied && lastApplied < len(rf.log)-1 {
@@ -817,13 +838,14 @@ func (rf *Raft) applyLogLoop(applyCh chan ApplyMsg) {
 					Command: rf.log[lastApplied].Command,
 				}
 
-				DPrintf1(3, "[%d] applyMsg idx = [%d] :[%+v]", rf.me, rf.lastApplied, applyMsg)
+				DPrintf1(6, "Start write chan [%d]", rf.me)
 				applyCh <- applyMsg
+				DPrintf1(6, "End write chan [%d]", rf.me)
 				rf.lastApplied = lastApplied
 			}
 		}
 	}
-	
+
 	rf.mu.Unlock()
 	// for {
 	// 	select {
@@ -892,7 +914,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	DPrintf1(5, "Node %d: States = %d", rf.me, rf.getRole())
+	// DPrintf1(5, "Node %d: States = %d", rf.me, rf.getRole())
 
 	rf.resetElectionTimer()
 	// rf.heartbeatTimeout = heartbeatTimeout
