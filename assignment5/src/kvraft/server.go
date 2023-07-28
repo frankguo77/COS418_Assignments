@@ -24,11 +24,6 @@ const (
 	Get    = 3
 )
 
-type OpRes struct {
-	err Err
-	val string
-}
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
@@ -38,6 +33,11 @@ type Op struct {
 	Val       string
 	ClientId  int64
 	RequestId int64
+}
+
+type OpRes struct {
+	err Err
+	op *Op
 }
 
 type RaftKV struct {
@@ -53,6 +53,8 @@ type RaftKV struct {
 	kvdata      map[string]string
 	waitingMap  map[int]chan OpRes
 	lastApplied map[int64]int64
+	// appliedResult []string
+	// appliedStartIdx int
 }
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
@@ -66,10 +68,10 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// }
 
 	op := Op{
-		Type: Get,
-		Key:  args.Key,
-		ClientId : args.ClientId,
-		RequestId : args.RequestId,		
+		Type:      Get,
+		Key:       args.Key,
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
 	}
 
 	index, _, isLeader := kv.rf.Start(op)
@@ -78,17 +80,16 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	if !isLeader {
 		reply.WrongLeader = true
 		return
-	}	
+	}
 
 	// DPrintf("leader get")
 	reply.WrongLeader = false
-	err, val := kv.waitApplyOp(index)
+	err, val := kv.waitApplyOp(&op, index)
 	reply.Err = err
 	reply.Value = val
-
 }
 
-func (kv *RaftKV) waitApplyOp(index int) (err Err, val string){
+func (kv *RaftKV) waitApplyOp(op *Op, index int) (err Err, val string) {
 	resultChan := make(chan OpRes)
 	kv.mu.Lock()
 	kv.waitingMap[index] = resultChan
@@ -101,15 +102,19 @@ func (kv *RaftKV) waitApplyOp(index int) (err Err, val string){
 	case <-timeout:
 		err = TimeOut
 	case res = <-resultChan:
-		err = res.err
-		val = res.val
+		if res.op.ClientId != op.ClientId || res.op.RequestId != op.RequestId {
+			err = TimeOut
+		} else {
+			err = res.err
+			val = res.op.Val
+		}
 	}
 
 	kv.mu.Lock()
 	delete(kv.waitingMap, index)
 	kv.mu.Unlock()
 	close(resultChan)
-	return 
+	return
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -154,7 +159,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	reply.WrongLeader = false
-	err, _ := kv.waitApplyOp(index)
+	err, _ := kv.waitApplyOp(&op, index)
 	reply.Err = err
 
 	return
@@ -197,6 +202,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.waitingMap = make(map[int]chan OpRes)
 	kv.kvdata = make(map[string]string)
 	kv.lastApplied = make(map[int64]int64)
+	// kv.appliedResult = make([]string, 0)
+	// kv.appliedStartIdx = 0
 
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
@@ -215,36 +222,49 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				// }
 				// var err Err
 				// err = OK
-                op, _ := msg.Command.(Op)
+				op, _ := msg.Command.(Op)
 
-                res := OpRes{
-					err : OK,
-					val : op.Val,
+				res := OpRes{
+					err: OK,
+					op: &op,
 				}
 
 				kv.mu.Lock()
-				
-				switch op.Type {
-				case Append:
-					kv.kvdata[op.Key] += op.Val
-				case Put:
-					kv.kvdata[op.Key] = op.Val
-				case Get:
-					if val, ok := kv.kvdata[op.Key]; ok {
-						res.val = val
-					} else {
-						res.err = ErrNoKey
+				appliedID, ok := kv.lastApplied[op.ClientId]
+				if ok && op.RequestId <= appliedID {
+					if op.Type == Get {
+						if val, ok := kv.kvdata[op.Key]; ok {
+							res.op.Val = val
+						} else {
+							res.err = ErrNoKey
+						}
 					}
+				} else {
+					switch op.Type {
+					case Append:
+						kv.kvdata[op.Key] += op.Val
+					case Put:
+						kv.kvdata[op.Key] = op.Val
+					case Get:
+						if val, ok := kv.kvdata[op.Key]; ok {
+							res.op.Val = val
+						} else {
+							res.err = ErrNoKey
+						}
+					}
+
+					kv.lastApplied[op.ClientId] = op.RequestId
 				}
 
-				kv.lastApplied[op.ClientId] = op.RequestId
+				ch, ok := kv.waitingMap[idx]
+				kv.mu.Unlock()
 
-				if ch, ok := kv.waitingMap[idx]; ok {
+				if ok {
 					// DPrintf("Start write kvch")
 					ch <- res
 					// DPrintf("End write kvch")
 				}
-				kv.mu.Unlock()
+
 			}
 		}
 	}()
