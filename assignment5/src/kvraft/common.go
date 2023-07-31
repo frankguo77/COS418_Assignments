@@ -19,7 +19,6 @@ type PutAppendArgs struct {
 	// otherwise RPC will break.
 	ClientId  int64
 	RequestId int64
-
 }
 
 type PutAppendReply struct {
