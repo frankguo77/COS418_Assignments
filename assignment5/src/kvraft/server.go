@@ -90,7 +90,7 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *RaftKV) waitApplyOp(op *Op, index int) (err Err, val string) {
-	resultChan := make(chan OpRes)
+	resultChan := make(chan OpRes,1)
 	kv.mu.Lock()
 	kv.waitingMap[index] = resultChan
 	kv.mu.Unlock()
@@ -112,8 +112,8 @@ func (kv *RaftKV) waitApplyOp(op *Op, index int) (err Err, val string) {
 
 	kv.mu.Lock()
 	delete(kv.waitingMap, index)
+	// close(resultChan)
 	kv.mu.Unlock()
-	close(resultChan)
 	return
 }
 
@@ -258,7 +258,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 				ch, ok := kv.waitingMap[idx]
 				kv.mu.Unlock()
-
 				if ok {
 					// DPrintf("Start write kvch")
 					ch <- res

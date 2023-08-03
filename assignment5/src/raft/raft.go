@@ -371,9 +371,13 @@ func (rf *Raft) RequestAppendEntries(args RequestAppendEntriesArgs, reply *Reque
 		reply.Sucess, reply.XIndex, reply.XTerm = false, idx, rf.log[args.PrevLogIndex].Term
 	} else {
 		reply.Sucess = true
-		rf.log = append(rf.log[:args.PrevLogIndex+1], args.Entries...)
-		// if logChanged {
-		rf.persist()
+		for i, entry := range args.Entries {
+			if len(rf.log) <= args.PrevLogIndex+i+1 || rf.log[args.PrevLogIndex+i+1].Term != entry.Term {
+				rf.log = append(rf.log[:args.PrevLogIndex+i+1], args.Entries[i:]...)
+				rf.persist()
+				break
+			}
+		}
 
 		if args.LeaderCommit > rf.commitIndex {
 			rf.setCommitIdx(min(args.LeaderCommit, len(rf.log)-1))
@@ -848,7 +852,7 @@ func (rf *Raft) applyLogLoop(applyCh chan ApplyMsg) {
 			}
 
 			rf.mu.Lock()
-			rf.lastApplied = entries[len(entries) - 1].Index
+			rf.lastApplied = entries[len(entries)-1].Index
 		}
 	}
 
