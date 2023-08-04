@@ -703,6 +703,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	atomic.StoreInt32(&rf.dead, 1)
+	rf.claimToBeApplied.Signal() // give the apply gorutine a chance to quit
 }
 
 func (rf *Raft) killed() bool {
@@ -847,7 +848,19 @@ func (rf *Raft) applyLogLoop(applyCh chan ApplyMsg) {
 
 				DPrintf1(6, "Start write chan [%d]", rf.me)
 				//DPrintf1(7, "[%d](%d) about to apply [%d]", rf.me, rf.getRole(), lastApplied)
-				applyCh <- applyMsg
+				applied := false
+				for !applied {
+					select {
+					case applyCh <- applyMsg:
+						applied = true
+					default:
+						if rf.killed() {
+							return
+						}
+						//do nothing, just have a chance to check quit or not
+					}
+				}
+
 				DPrintf1(6, "End write chan [%d]", rf.me)
 			}
 
